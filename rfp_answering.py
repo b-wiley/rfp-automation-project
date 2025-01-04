@@ -3,7 +3,7 @@ import csv
 import json
 import sys
 
-
+# Still a work in progress!
 
 
 reformatting_prompt = 'Your task is to take a requirement laid out by a prospective customer and turn the requirement into a question. The context is that a prospective customer is looking to learn more about the capabilities of Census (www.getcensus.com). Typically the question is going to revolve around asking if Census supports a given feature or if Census has a given integration.  For example, here is a requirement: "Support Databricks as a source". The output of the question should then be:  "Does Census support Databricks as a source integration?"'
