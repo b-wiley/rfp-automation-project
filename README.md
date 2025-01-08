@@ -20,8 +20,9 @@ There are several components to this project, as there are several steps that ne
 
 1. Transform Data (`transform_data_for_fine_tuning.py`) - Prior to fine-tuning an OpenAI model, we need to ensure that our data is in the correct format.  In this case, our data is going to come from historical RFPs that we've filled out.  So, regardless of the shape of the RFP (they're always in different formats), we need to ensure that we're taking the correct columns and mapping them to the right parameters for OpenAI's fine-tuning endpoint.  In this case, we are taking data from a .csv format and transforming the data into a JSONL payload which is what OpenAI asks for (https://platform.openai.com/docs/guides/fine-tuning).  We're then going to store this somewhere (locally for now) prior to fine-tuning.
 2. Fine-tune Model (`fine_tune_open_ai.py`) - Once we have data in the right format, we are going to then select the newly created JSONL file and upload that file into OpenAI so that we can obtain a `file_id`.  Then, once we have the `file_id`, we will fine-tune an OpenAI model using our data.  In this case, I have decided to use the following model: `GPT-4o-mini-2024-07-18`.
-3. Generate Answers in RFP (`rfp_automation.py`) - Lastly, and most importantly, we are going to generate answers that will automatically be written into the original CSV file.  I will dedicate the next section to explaining how this works.
+3. Generate Answers in RFP (`rfp_automation.py`) - Lastly, and most importantly, we are going to generate answers that will automatically be written into the original CSV file.  <**Below you will see a diagram outlining the flow of this script to ultimately execute the task**>
 
 --------
 
 
+![Project Diagram](images/rfp_automation_flow_chart.png)
