@@ -24,5 +24,8 @@ There are several components to this project, as there are several steps that ne
 
 --------
 
-
 ![Project Diagram](images/rfp_automation_flow_chart.png)
+
+--------
+
+One key thing to remember is that AI is not always perfect.  The goal of this project it to get answers as close to perfect as possible.  I see Generative AI as doing anywhere from 80-95% of the work, then having a human in the loop to finish the last 5-20% to ensure everything is accurate.  80% productivity gain is massive on a tedious task like this!
