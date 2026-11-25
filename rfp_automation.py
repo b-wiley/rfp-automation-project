@@ -1,151 +1,108 @@
-from openai import OpenAI #type:ignore
-import csv
+"""Fill in an RFP CSV with answers from the fine-tuned model.
+
+Requests run in parallel, so a 500-row RFP takes about a minute instead of tens of minutes.
+Answers are written to a new file; the original is never overwritten.
+
+Reads your key from OPENAI_API_KEY, and the fine-tuned model name from --model or RFP_MODEL.
+
+Example:
+    python rfp_automation.py new_rfp.csv --model ft:gpt-4o-mini-2024-07-18:census:census-rfp:abc123
+"""
+
+import argparse
+import asyncio
+import os
 import sys
 
-# OpenAI Credentials
-client = OpenAI(
-  organization='org-xxxxxx',
-  project='proj_xxxxxxx',
-  api_key = '**************'
+from openai import AsyncOpenAI
+
+from rfp_common import (
+    ANSWER_SYSTEM_PROMPT,
+    BASE_MODEL,
+    REFORMAT_SYSTEM_PROMPT,
+    choose_column,
+    default_output_path,
+    read_csv,
+    write_csv,
 )
 
-def designate_columns(rows):
-    keys = list(rows[0].keys())
-    i = 0
-    columns_options = {}
-    question_column = ""
-    answer_column = ""
 
-# --------------------------------------------------------
-    print("--------------------------------------------------------------------")
-    print()
-    print("Below are the columns in the uploaded set of data.")
-    while i < len(keys):
-        print(f"{i}) {keys[i]}")
-        columns_options[i] = keys[i]
-        i += 1
-    print("--------------------------------------------------------------------")
-
-# --------------------------------------------------------
-    question_column_number_selection = input("Please select the number that corresponds to the question column: ")
-    for nums in columns_options.keys():
-        if nums == int(question_column_number_selection):
-            question_column = columns_options[int(question_column_number_selection)]
-            print(f"Question Column Selected: {question_column}")
-
-    if not question_column:
-        print("Invalid selection made, ending program.  Please retry.")
-        sys.exit()
-    print()
-
-# --------------------------------------------------------
-    answer_column_number_selection = input("Please select the number that corresponds to the answer column: ")
-    for nums in columns_options.keys():
-        if nums == int(answer_column_number_selection):
-            answer_column = columns_options[int(answer_column_number_selection)]
-            print(f"Answer Column Selected: {answer_column}")
-
-    if not question_column:
-        print("Invalid selection made, ending program.  Please retry.")
-        sys.exit()
-    
-    print("--------------------------------------------------------------------")
-    print()
-    return question_column, answer_column
-
-def format_questions(rows, question_column):
-    reformatted_questions_obj = {}
-    #reformatting_prompt = 'Your task is to take a requirement laid out by a prospective customer and turn the requirement into a question. The context is that a prospective customer is looking to learn more about the capabilities of Census (www.getcensus.com). Typically the question is going to revolve around asking if Census supports a given feature or if Census has a given integration.  For example, here is a requirement: "Support Databricks as a source". The output of the question should then be:  "Does Census support Databricks as a source integration?"'
-    reformatting_prompt = """
-        Your task is to take a requirement laid out by a prospective customer and turn the requirement into a question. The context is that a prospective customer is looking to learn more about the capabilities of Census (www.getcensus.com).
-        Typically the question is going to revolve around asking if Census supports a given feature or if Census has a given integration.
-        For example, here is a requirement: "Support Databricks as a source". The output of the question should then be:  "Does Census support Databricks as a source integration?"
-    """
-    i=0
-    while i < len(rows):
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini-2024-07-18",
+async def ask(client, limiter, model, system_prompt, text):
+    async with limiter:
+        response = await client.chat.completions.create(
+            model=model,
             messages=[
-                {"role": "developer", "content": reformatting_prompt},
-                {"role": "user", "content": rows[i][question_column]}
-            ]
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+            temperature=0.2,  # low temperature keeps answers consistent from run to run
         )
-
-        new_question = completion.choices[0].message.content
-        reformatted_questions_obj[i] = {
-            "original_question": rows[i][question_column],
-            "reformatted_question": new_question
-        }
-        i+=1
-
-    print("--------------------------------------------------------------------")
-    print("Questions have been generated!  Moving on to generate answers step.  Stand by.....")
-    print("--------------------------------------------------------------------")
-    print()
-    return reformatted_questions_obj
+        return response.choices[0].message.content.strip()
 
 
-def generate_answers(rows, reformatted_questions_obj):
-    questions_answered_obj = reformatted_questions_obj
-    generate_answers_prompt = """
-        You are a knowledgeable and helpful assistant designed to provide precise, accurate, and user-centric answers to questions. Your primary resource for context and guidance is the Census Documentation. When answering questions:
-            1) Prioritize Information: Always refer to the Census Documentation for accurate, up-to-date information. If the documentation doesn't cover the query, draw upon general knowledge while clearly indicating the source.
-            2) Clarity and Relevance: Ensure your responses are concise, clear, and directly relevant to the user's question. Avoid overloading with unnecessary details.
-            3) Polite and Professional Tone: Maintain a courteous, professional tone in all responses, ensuring a positive user experience.
-            4) Handling Unavailable Information: If a question falls outside the scope of available resources or expertise, kindly inform the user and suggest consulting the Census support team or alternative resources.
-        Your goal is to assist users effectively by leveraging the best available information and providing well-structured, insightful answers. 
-        Additionally, each answer should elaborate in the form of 2-3 full sentences with as much information as possible.
-    """
-    
-    i=0
+async def process_row(client, limiter, args, requirement, progress):
+    try:
+        # Requirements already phrased as questions skip the rewrite call.
+        if args.no_reformat or requirement.endswith("?"):
+            question = requirement
+        else:
+            question = await ask(client, limiter, BASE_MODEL, REFORMAT_SYSTEM_PROMPT, requirement)
+        answer = await ask(client, limiter, args.model, ANSWER_SYSTEM_PROMPT, question)
+    except Exception as e:  # one bad row shouldn't sink the whole RFP
+        answer = f"ERROR: {e}"
+    progress["done"] += 1
+    print(f"\r  {progress['done']}/{progress['total']} answered", end="", flush=True)
+    return answer
 
-    # while loop
-    while i < len(questions_answered_obj):
-        completion = client.chat.completions.create(
-            # Fine-tuned model
-            model="*****",
-            messages=[
-                {"role": "developer", "content": generate_answers_prompt},
-                {"role": "user", "content": questions_answered_obj[i]['reformatted_question']}
-            ]
-        )
-        questions_answered_obj[i]["generated_answer"] = completion.choices[0].message.content
-        i+=1
-    
-    print("--------------------------------------------------------------------")
-    print("Answers have been generated!  Writing answers back into the orignal CSV file.  Stand by.....")
-    print("--------------------------------------------------------------------")
-    print()
-    return questions_answered_obj
 
-def write_to_csv(rows, answer_column, questions_answered_obj, csv_file, reader):
-    for i, row in enumerate(rows):
-        row[answer_column] = questions_answered_obj[i]['generated_answer']
+async def run(args):
+    rows, fieldnames = read_csv(args.csv_file)
+    q_col = choose_column(fieldnames, "question", args.question_col)
+    a_col = choose_column(fieldnames, "answer", args.answer_col)
 
-    with open(csv_file, mode='w', newline='') as file:
-        fieldnames = reader.fieldnames
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        
-        writer.writeheader()
-        writer.writerows(rows)
+    # Only answer rows that have a requirement and don't already have an answer.
+    todo = [
+        i for i, row in enumerate(rows)
+        if (row.get(q_col) or "").strip() and (args.overwrite or not (row.get(a_col) or "").strip())
+    ]
+    if not todo:
+        sys.exit("Nothing to answer: every row is blank or already has an answer (use --overwrite to redo them).")
 
-    print("--------------------------------------------------------------------")
-    print("CSV file has been updated with the generated answers!")
-    print("--------------------------------------------------------------------")
-    print()
-    return
+    print(f"\nAnswering {len(todo)} of {len(rows)} rows with {args.model} ({args.concurrency} at a time)...")
+    client = AsyncOpenAI(max_retries=5)  # retries rate-limit and network errors with backoff
+    limiter = asyncio.Semaphore(args.concurrency)
+    progress = {"done": 0, "total": len(todo)}
+
+    answers = await asyncio.gather(
+        *(process_row(client, limiter, args, rows[i][q_col].strip(), progress) for i in todo)
+    )
+
+    for i, answer in zip(todo, answers):
+        rows[i][a_col] = answer
+
+    output = args.output or default_output_path(args.csv_file, "answered")
+    write_csv(output, rows, fieldnames)
+    errors = sum(a.startswith("ERROR:") for a in answers)
+    print(f"\n\nWrote answers to {output}" + (f" ({errors} rows failed; search for 'ERROR:')" if errors else ""))
+    print("Review every answer before sending the RFP.")
 
 
 def main():
-    # CSV file location
-    csv_file = "***"
-    with open(csv_file, "r") as file:
-        reader = csv.DictReader(file)
-        rows = list(reader)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("csv_file", help="RFP CSV to fill in")
+    parser.add_argument("--model", default=os.environ.get("RFP_MODEL"), help="Fine-tuned model name")
+    parser.add_argument("--question-col", help="Question column name (asked interactively if omitted)")
+    parser.add_argument("--answer-col", help="Answer column name (asked interactively if omitted)")
+    parser.add_argument("-o", "--output", help="Output CSV path (default: <input>_answered.csv)")
+    parser.add_argument("--concurrency", type=int, default=10, help="Parallel requests (default 10)")
+    parser.add_argument("--no-reformat", action="store_true", help="Skip rewriting requirements as questions")
+    parser.add_argument("--overwrite", action="store_true", help="Also redo rows that already have an answer")
+    args = parser.parse_args()
 
-    [question_column, answer_column] = designate_columns(rows)
-    reformatted_questions_obj = format_questions(rows, question_column)
-    questions_answered_obj = generate_answers(rows, reformatted_questions_obj)
-    write_to_csv(rows, answer_column, questions_answered_obj, csv_file, reader)
+    if not args.model:
+        sys.exit("Set the fine-tuned model with --model or the RFP_MODEL environment variable.")
+    asyncio.run(run(args))
 
-main()
+
+if __name__ == "__main__":
+    main()

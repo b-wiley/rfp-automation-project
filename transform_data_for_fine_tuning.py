@@ -1,63 +1,56 @@
-# The goal of this python script is to intake a csv file, parse through each row to obtain questions & answers, then
-# insert those questions and answers into the required payload format, which then gets stored as a JSONL file format.
-# OpenAI's Fine-Tuning endpoint requires that the file structure be formatted as a JSONL.  OpenAI also requires the
-# payload be structured in a certain format, which is why this script exists.
+"""Turn one or more completed RFP CSVs into the JSONL training file OpenAI fine-tuning expects.
 
-import csv
+Example:
+    python transform_data_for_fine_tuning.py past_rfp_1.csv past_rfp_2.csv -o training.jsonl \
+        --question-col Requirement --answer-col Response
+"""
+
+import argparse
 import json
 
-# Prompt that will be used to provide context for training
-prompt = ""
-# Required roles for OpenAI fine-tuning endpoint
-roles = ["system","user","assistant"]
-
-# CSV file location
-csv_file = ""
-# Desired JSONL file output location
-jsonl_file = ""
-
-question_column = ''
-answer_column = '='
-
-# Read CSV file and assign to vairable "rows"
-with open(csv_file, "r") as file:
-    reader = csv.DictReader(file)
-    rows = list(reader)
+from rfp_common import ANSWER_SYSTEM_PROMPT, choose_column, read_csv
 
 
-# Templatize the reequired OpenAI fine tuning payload format
-# Loop through each row in the CSV and write the payload to the JSONL file
-# Automatically dump each new JSONL row into the output file
-def main(rows, roles, prompt, jsonl_file, question_column, answer_column):
-    with open(jsonl_file, mode='w', encoding='utf-8') as jsonl_file:
-      payload = {
-        "messages": [
-            {
-                "role": roles[0],
-                "content": prompt
-            },
-            {
-                "role": roles[1], 
-                "content": ""
-            },
-            {
-                "role": roles[2],
-                "content": ""
-            }
-        ]
-      }
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("csv_files", nargs="+", help="Completed RFP CSV file(s)")
+    parser.add_argument("-o", "--output", default="training.jsonl", help="Output JSONL path")
+    parser.add_argument("--question-col", help="Question column name (asked interactively if omitted)")
+    parser.add_argument("--answer-col", help="Answer column name (asked interactively if omitted)")
+    args = parser.parse_args()
 
-      for row in rows:
-          question = row[question_column]
-          answer = row[answer_column]
+    written = skipped = 0
+    seen = set()
+    with open(args.output, "w", encoding="utf-8") as out:
+        for csv_file in args.csv_files:
+            rows, fieldnames = read_csv(csv_file)
+            print(f"\n{csv_file}: {len(rows)} rows")
+            q_col = choose_column(fieldnames, "question", args.question_col)
+            a_col = choose_column(fieldnames, "answer", args.answer_col)
 
-          payload.copy()
+            for row in rows:
+                question = (row.get(q_col) or "").strip()
+                answer = (row.get(a_col) or "").strip()
+                # Skip blank rows and exact duplicates (the same requirement shows up across many RFPs).
+                if not question or not answer or (question, answer) in seen:
+                    skipped += 1
+                    continue
+                seen.add((question, answer))
 
-          payload["messages"][1]["content"] = question + "?"
-          payload["messages"][2]["content"] = answer
+                example = {
+                    "messages": [
+                        {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
+                        {"role": "user", "content": question},
+                        {"role": "assistant", "content": answer},
+                    ]
+                }
+                out.write(json.dumps(example, ensure_ascii=False) + "\n")
+                written += 1
 
-          jsonl_file.write(json.dumps(payload) + '\n')
+    print(f"\nWrote {written} training examples to {args.output} (skipped {skipped} blank or duplicate rows).")
+    if written < 10:
+        print("Warning: OpenAI requires at least 10 examples to fine-tune.")
 
-    print("File transformed.")
 
-main(rows, roles, prompt, jsonl_file, question_column, answer_column)
+if __name__ == "__main__":
+    main()

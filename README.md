@@ -22,6 +22,24 @@ There are several components to this project, as there are several steps that ne
 2. Fine-tune Model (`fine_tune_open_ai.py`) - Once we have data in the right format, we are going to then select the newly created JSONL file and upload that file into OpenAI so that we can obtain a `file_id`.  Then, once we have the `file_id`, we will fine-tune an OpenAI model using our data.  In this case, I have decided to use the following model: `GPT-4o-mini-2024-07-18`.
 3. Generate Answers in RFP (`rfp_automation.py`) - Lastly, and most importantly, we are going to generate answers that will automatically be written into the original CSV file.  <**Below you will see a diagram outlining the flow of this script to ultimately execute the task**>
 
+### Usage
+
+```bash
+pip install openai
+export OPENAI_API_KEY=sk-...
+
+# 1. Build training data from past, completed RFPs (any number of files)
+python transform_data_for_fine_tuning.py past_rfp_1.csv past_rfp_2.csv -o training.jsonl
+
+# 2. Fine-tune and wait for the model name
+python fine_tune_open_ai.py training.jsonl --wait
+
+# 3. Fill in a new RFP (writes new_rfp_answered.csv; the original is left alone)
+python rfp_automation.py new_rfp.csv --model ft:gpt-4o-mini-2024-07-18:...
+```
+
+Column names can be passed with `--question-col` / `--answer-col`, otherwise each script asks. Requests run in parallel (`--concurrency`, default 10), rows that already have an answer are skipped, and any row that fails is marked `ERROR:` instead of stopping the run. Shared prompts and settings live in `rfp_common.py`.
+
 --------
 
 ![Project Diagram](images/rfp_automation_flow_chart.png)
